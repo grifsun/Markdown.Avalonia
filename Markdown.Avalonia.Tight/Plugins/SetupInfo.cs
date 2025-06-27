@@ -39,6 +39,8 @@ namespace Markdown.Avalonia.Plugins
         private IPathResolver? _pathResolver;
         private IPathResolver? _defaultPathResolver;
 
+        private IImageCache? _imageCache;
+        private IImageCache? _defaultImageCache;
         private ImageLoader _imageLoader;
 
         private bool _EnableNoteBlock = true;
@@ -60,7 +62,7 @@ namespace Markdown.Avalonia.Plugins
         internal ICommand HyperlinkCommand => _overwriteHyperlink ?? _command ?? (_defaultHyperlink ??= new DefaultHyperlinkCommand());
         internal IContainerBlockHandler? ContainerBlock => _overwriteHandler ?? _containerBlock;
         internal IPathResolver PathResolver => _pathResolver ?? (_defaultPathResolver ??= new DefaultPathResolver());
-
+        internal IImageCache ImageCache => _imageCache ?? (_defaultImageCache ??= new DefaultImageCache());
 
         public SetupInfo()
         {
@@ -232,6 +234,18 @@ namespace Markdown.Avalonia.Plugins
             _pathResolver = resolver;
         }
 
+        public void SetOnce(IImageCache imageCache)
+        {
+            CheckChangeable();
+
+            if (_imageCache is not null)
+            {
+                throw new InvalidOperationException("IImageCache is already set. Please check Markdown.Avalonia plugins");
+            }
+
+            _imageCache = imageCache;
+        }
+
         public void Register(IImageResolver resolver)
         {
             CheckChangeable();
@@ -345,7 +359,6 @@ namespace Markdown.Avalonia.Plugins
         class ImageLoader
         {
             private SetupInfo _setupInfo;
-            private Dictionary<string, WeakReference<IImage>> _cache;
             private Lazy<Bitmap> _imageNotFound;
 
 #pragma warning disable CS0618
@@ -356,7 +369,6 @@ namespace Markdown.Avalonia.Plugins
             public ImageLoader(SetupInfo info)
             {
                 _setupInfo = info;
-                _cache = new();
 
                 _imageNotFound = new Lazy<Bitmap>(() =>
                 {
@@ -368,7 +380,7 @@ namespace Markdown.Avalonia.Plugins
 
             public CImage Load(string urlTxt)
             {
-                if (_cache.TryGetValue(urlTxt, out var bitmapRef) && bitmapRef.TryGetTarget(out var cachedBitmap))
+                if (_setupInfo.ImageCache.TryGetValue(urlTxt, out var cachedBitmap))
                 {
                     return new CImage(cachedBitmap ?? _imageNotFound.Value);
                 }
@@ -386,24 +398,19 @@ namespace Markdown.Avalonia.Plugins
 
             private async Task<IImage?> LoadImageByPlugin(string urlTxt)
             {
-                foreach (var key in _cache.Keys.ToArray())
-                {
-                    if (_cache[key].TryGetTarget(out var _))
-                        _cache.Remove(key);
-                }
-
+                _setupInfo.ImageCache.Invalidate();
 
                 var streamTask = _setupInfo.PathResolver.ResolveImageResource(urlTxt);
                 if (streamTask is null)
                 {
-                    _cache[urlTxt] = new WeakReference<IImage>(_imageNotFound.Value);
+                    _setupInfo.ImageCache[urlTxt] = _imageNotFound.Value;
                     return null;
                 }
 
                 using var stream = await streamTask;
                 if (stream is null)
                 {
-                    _cache[urlTxt] = new WeakReference<IImage>(_imageNotFound.Value);
+                    _setupInfo.ImageCache[urlTxt] = _imageNotFound.Value;
                     return null;
                 }
 
@@ -427,7 +434,7 @@ namespace Markdown.Avalonia.Plugins
 
                     if (image is not null)
                     {
-                        _cache[urlTxt] = new WeakReference<IImage>(image);
+                        _setupInfo.ImageCache[urlTxt] = image;
                         return image;
                     }
                 }
@@ -435,12 +442,12 @@ namespace Markdown.Avalonia.Plugins
                 try
                 {
                     var image = new Bitmap(reuseStream);
-                    _cache[urlTxt] = new WeakReference<IImage>(image);
+                    _setupInfo.ImageCache[urlTxt] = image;
                     return image;
                 }
                 catch
                 {
-                    _cache[urlTxt] = new WeakReference<IImage>(_imageNotFound.Value);
+                    _setupInfo.ImageCache[urlTxt] = _imageNotFound.Value;
                     return null;
                 }
             }
